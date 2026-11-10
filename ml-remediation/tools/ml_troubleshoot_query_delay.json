@@ -1,0 +1,15 @@
+{
+  "id": "ml_troubleshoot_query_delay",
+  "type": "workflow",
+  "description": "Read-only decision tree for missing documents / delayed data / query_delay sizing.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_wf_troubleshoot_query_delay@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

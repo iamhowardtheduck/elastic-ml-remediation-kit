@@ -1,0 +1,15 @@
+{
+  "id": "ml_validate_job_spec",
+  "type": "workflow",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "description": "Validate a proposed anomaly detection job configuration (detectors, bucket_span, influencers, analysis_limits) against Elasticsearch before creating or changing a job. Read-only.",
+  "configuration": {
+    "workflow_id": "@@workflow:ad_validate_job_spec@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

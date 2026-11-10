@@ -1,0 +1,15 @@
+{
+  "id": "ml_remediate_job",
+  "type": "workflow",
+  "description": "SAFE auto-fix for one anomaly detection job: force-restarts a failed job (stop datafeed, force close, open, start datafeed) or starts a stopped datafeed on an opened job; escalates memory hard_limit and repeat failures to a Kibana Case with a diagnosis. Leaves closed jobs alone. Logs to ml-remediation-log. Inputs: job_id, source='agent'.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ML AD - Remediate Job@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

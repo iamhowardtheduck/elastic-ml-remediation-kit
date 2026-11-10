@@ -1,0 +1,15 @@
+{
+  "id": "ml_estimate_memory",
+  "type": "workflow",
+  "description": "Estimate model memory for a job from source-field cardinality (read-only).",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_estimate_memory_requirement@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

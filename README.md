@@ -1,0 +1,102 @@
+# Elastic ML Remediation Kit
+
+Keeps Elastic **anomaly detection jobs** healthy and catches the **ingest backlogs** that starve them.
+Everything runs inside your cluster: Kibana alerting rules detect problems, Kibana Workflows apply
+safe fixes, and an **Agent Builder agent** diagnoses what automation shouldn't fix alone. Escalations
+land in Kibana Cases, and every action is logged.
+
+Built and tested on **Elastic 9.5.6**: Agent Builder, Workflows, ES|QL `FORK`/`FUSE`, and a
+`.workflows` system connector on alerting rules.
+
+```
+ .ml-notifications-*        ML job state (every 15m)          metrics-logstash.pipeline-*
+        │                          │                                   │
+  ┌─────┴──────────────┐   ┌───────┴────────┐                 ┌────────┴─────────┐
+  │ rule: delayed data │   │ rule: ML errors│                 │ rule: LS queue   │
+  └─────┬──────────────┘   └───────┬────────┘                 │  > 5 GB / 25%    │
+        ▼                          ▼                          └────────┬─────────┘
+  workflow: raise           workflow: health sweep ──► workflow:        ▼
+  query_delay 1.5x,          (scheduled + alert)       remediate job   workflow: open Case +
+  cap 15m                                              (safe fixes)    Ingest Steward diagnosis
+        │                                                   │
+        └──────── escalations ──► Kibana Case + ML Job Remediator diagnosis ◄──┘
+                                       │
+                    every decision ──► ml-remediation-log
+```
+
+## What's in the box
+
+| Component | What it does |
+|---|---|
+| **Agent `ml-job-remediator`** | Chat agent for AD job health, with **5 skills** (max 5 tools each) and no directly attached tools. It applies safe fixes on its own; memory-limit changes and snapshot reverts are tools set to **always ask for confirmation**. |
+| Skill `ml-job-triage` | What's broken and why: notification triage, job state, messages, config, remediation history. |
+| Skill `ml-job-recovery` | Failed jobs, stopped datafeeds, "no data" datafeeds. |
+| Skill `ml-delayed-data` | Missed documents due to ingest latency; sizing `query_delay`. |
+| Skill `ml-memory-and-model` | Memory limits, model snapshots, stale `blocked: revert`. Changes need approval. |
+| Skill `ml-job-design-guide` *(optional)* | Hybrid search over a book on designing ML jobs, so recommendations cite chapter and page. See [knowledge-base/](knowledge-base/). |
+| Workflow **ML AD - Remediate Job** | Per job. A `failed` job gets its datafeed stopped, then force-closed, reopened and restarted; a stopped datafeed on an open job gets started. **Escalates** when the job is blocked, at memory `hard_limit`, or after 3 automatic fixes in 24h. Repeat escalations are suppressed for 24h. |
+| Workflow **ML AD - Health Sweep** | Every 15 minutes, and whenever the errors rule fires. Works from live job state; closed jobs are left alone. |
+| Workflow **ML Job Datafeed Delayed-Data Auto-Remediation** | Raises `query_delay` 1.5× (at least +60s), capped at 15m. Restarts only datafeeds that were running. At the cap it escalates once a day. |
+| Rule **ML Notifications - Delayed Data Detected** | One alert per job, every 15m, for new *and* ongoing alerts, so the delay keeps stepping up until the warnings stop. |
+| Rule **ML Notifications - Job/Datafeed Errors** | New ML errors or "No node found" messages trigger the sweep immediately. |
+| Index `ml-remediation-log` (+ pipeline) | Audit trail and loop-guard state. `@timestamp` is set at ingest. |
+| **Ingest hardening** | Rule **Logstash persistent queue backing up** plus workflow **Logstash Queue Backlog - Diagnose** (Case + Ingest Steward diagnosis); `stagger_rollovers.py`; [RUNBOOK](ingest-hardening/RUNBOOK.md). |
+
+### Remediation policy (encoded in the workflows and the agent)
+
+- **Automatic:** restart failed jobs and stopped datafeeds; start/stop datafeeds as part of a fix; raise `query_delay` up to 15m.
+- **Asks first:** `model_memory_limit` changes, snapshot reverts, `query_delay` above 15m, bucket_span/query/index changes, opening a *closed* job, cancelling tasks.
+- **Never:** delete or reset jobs, datafeeds, results or snapshots; change security, ILM or templates.
+
+## Prerequisites
+
+1. **Elastic 9.5+** with Agent Builder, Workflows and an LLM connector configured for Agent Builder.
+2. **Elastic's `kibana-anomaly-detection` Agent Builder bundle**, from Elastic's agent skills (`elastic-kibana` plugin → `skills/kibana-anomaly-detection`). Register its tools and workflows, but *not* its skills, so your default agent stays untouched:
+   ```bash
+   cd <elastic-kibana>/skills/kibana-anomaly-detection
+   KIBANA_URL=... KIBANA_API_KEY=... node scripts/kibana-agent-builder.mjs tools register
+   KIBANA_URL=... KIBANA_API_KEY=... node scripts/kibana-agent-builder.mjs workflows register
+   ```
+   `install.py` checks for the `ad_*` tools it needs. It also patches a bug in `ad_ts_model_memory_health`, whose `limit` parameter is declared as a string.
+3. *(Optional)* The **Ingest Steward** agent, for the Logstash backlog diagnosis. Without it, that step is skipped and the case is still opened.
+4. A user or API key that can manage ML, Agent Builder, Workflows, alerting rules, Cases, and the `ml-remediation-log` index.
+
+## Install
+
+```bash
+cp config.example.env .env     # fill in ES_URL, KIBANA_URL, ES_API_KEY (and ES_CA_CERT)
+python3 install.py --dry-run   # see what would be created/updated
+python3 install.py             # install (idempotent - re-run after edits)
+python3 install.py --check     # drift report: package vs. deployed
+```
+
+| Flag | Effect |
+|---|---|
+| `--components ml` / `ingest` | Install only part of the kit (default: both). |
+| `--no-rules` | Install everything except the alerting rules, so nothing runs automatically yet. A good first step. |
+| `--book auto\|yes\|no` | Include the book-search skill (`auto` = only if `ml-book-passages` exists). |
+
+Remove with `python3 uninstall.py [--dry-run] [--delete-data]`. Cases and the Elastic bundle are left in place.
+
+## Costs and behaviour to know
+
+- **An agent diagnosis costs about 50–60k LLM tokens.** It only runs on escalations, at most once per job per 24h.
+- **`query_delay` raises delay anomaly results by the same amount.** At the 15m cap the fix is upstream; see the [RUNBOOK](ingest-hardening/RUNBOOK.md).
+- **Restarted datafeeds never backfill.** They resume after the job's latest processed record.
+- **`stagger_rollovers.py --apply` rolls over live data streams.** It only rolls write indices early; nothing is deleted.
+
+## Layout
+
+```
+install.py / uninstall.py      stdlib-only Python 3.9+ installer (placeholders @@workflow:<name>@@ resolved at install)
+ml-remediation/                agent, skills, tools, workflows, rules, index + pipeline
+knowledge-base/                build_passages.py + index template (bring your own book)
+ingest-hardening/              Logstash backlog rule + workflow, stagger_rollovers.py, RUNBOOK.md
+docs/lessons-learned.md        API behaviour and gotchas found while building this
+```
+
+## License
+
+Apache License 2.0 - see [LICENSE](LICENSE).
+
+This kit references, but does not include, Elastic's `kibana-anomaly-detection` Agent Builder bundle and any book content; those remain under their own licenses.

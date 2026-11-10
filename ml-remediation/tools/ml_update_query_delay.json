@@ -1,0 +1,15 @@
+{
+  "id": "ml_update_query_delay",
+  "type": "workflow",
+  "description": "Update a datafeed's query_delay (stop datafeed first, restart after). Policy: may raise automatically up to 15m; above that ask the user.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_update_datafeed_query_delay@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

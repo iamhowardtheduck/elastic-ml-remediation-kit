@@ -1,0 +1,15 @@
+{
+  "id": "ml_revert_model_snapshot",
+  "type": "workflow",
+  "description": "Revert a job to an earlier model snapshot, discarding model state after it. REQUIRES USER APPROVAL.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_revert_model_snapshot@@"
+  },
+  "confirmation": {
+    "askUser": "always"
+  }
+}

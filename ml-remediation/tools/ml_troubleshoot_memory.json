@@ -1,0 +1,15 @@
+{
+  "id": "ml_troubleshoot_memory",
+  "type": "workflow",
+  "description": "Read-only decision tree for soft_limit/hard_limit memory problems.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_wf_troubleshoot_memory_limit@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

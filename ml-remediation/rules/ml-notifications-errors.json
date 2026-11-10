@@ -1,0 +1,48 @@
+{
+  "name": "ML Notifications - Job/Datafeed Errors",
+  "rule_type_id": ".es-query",
+  "consumer": "alerts",
+  "schedule": {
+    "interval": "5m"
+  },
+  "tags": [
+    "ml",
+    "ml-remediation"
+  ],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "FROM .ml-notifications*\n| WHERE job_type == \"anomaly_detector\" AND (level == \"error\" OR message LIKE \"*No node found to start datafeed*\")\n| STATS errors = COUNT(*), latest = MAX(timestamp), message = MAX(message) BY job_id"
+    },
+    "timeField": "timestamp",
+    "timeWindowSize": 10,
+    "timeWindowUnit": "m",
+    "threshold": [
+      0
+    ],
+    "thresholdComparator": ">",
+    "size": 100,
+    "groupBy": "row",
+    "aggType": "count",
+    "termSize": 5,
+    "sourceFields": [],
+    "excludeHitsFromPreviousRun": true
+  },
+  "actions": [
+    {
+      "id": "system-connector-.workflows",
+      "params": {
+        "subAction": "run",
+        "subActionParams": {
+          "workflowId": "@@workflow:ML AD - Health Sweep@@",
+          "summaryMode": true,
+          "alertStates": {
+            "new": true,
+            "ongoing": false,
+            "recovered": false
+          }
+        }
+      }
+    }
+  ]
+}

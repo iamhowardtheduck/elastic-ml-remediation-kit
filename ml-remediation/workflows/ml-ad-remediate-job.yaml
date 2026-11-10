@@ -1,0 +1,293 @@
+name: ML AD - Remediate Job
+description: >-
+  Inspects one anomaly-detection job and applies only SAFE fixes automatically:
+  a failed job is force-stopped, force-closed, reopened and its datafeed restarted;
+  an opened job whose datafeed is stopped gets its datafeed started. Closed jobs are
+  treated as intentionally closed and left alone. Memory hard_limit, repeated failures
+  (loop guard) and fixes that do not take are escalated: a Kibana Case is opened or
+  updated and the ML Job Remediator agent writes a diagnosis into it. Every decision
+  is logged to the ml-remediation-log index.
+enabled: true
+tags: ["ml", "anomaly-detection", "remediation"]
+
+inputs:
+  - name: job_id
+    type: string
+    required: true
+    description: Anomaly detection job ID
+  - name: source
+    type: string
+    default: manual
+    description: Who triggered this run (manual, sweep, agent)
+
+triggers:
+  - type: manual
+
+consts:
+  max_auto_actions_24h: 3
+  case_owner: cases
+
+steps:
+  - name: job_stats
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/anomaly_detectors/{{ inputs.job_id }}/_stats"
+
+  - name: job_config
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/anomaly_detectors/{{ inputs.job_id }}"
+
+  - name: datafeed_stats
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/datafeeds/datafeed-{{ inputs.job_id }}/_stats"
+    on-failure:
+      continue: true
+
+  - name: recent_actions
+    type: elasticsearch.esql.query
+    with:
+      query: >-
+        FROM ml-remediation-log
+        | WHERE job_id == "{{ inputs.job_id }}" AND auto == true AND outcome IN ("applied", "failed")
+          AND action IN ("restart_failed_job", "start_datafeed")
+          AND @timestamp > NOW() - 24 hours
+        | STATS n = COUNT(*)
+    on-failure:
+      continue: true
+
+  - name: recent_escalations
+    type: elasticsearch.esql.query
+    with:
+      query: >-
+        FROM ml-remediation-log
+        | WHERE job_id == "{{ inputs.job_id }}" AND outcome IN ("escalated", "failed")
+          AND @timestamp > NOW() - 24 hours
+        | STATS n = COUNT(*)
+    on-failure:
+      continue: true
+
+  - name: plan
+    type: data.set
+    with:
+      datafeed_id: "datafeed-{{ inputs.job_id }}"
+      job_state: "{{ steps.job_stats.output.jobs[0].state }}"
+      datafeed_state: "{{ steps.datafeed_stats.output.datafeeds[0].state | default: 'missing' }}"
+      memory_status: "{{ steps.job_stats.output.jobs[0].model_size_stats.memory_status }}"
+      recent_auto_actions: "{{ steps.recent_actions.output.values[0][0] | default: 0 }}"
+      blocked_reason: "{{ steps.job_config.output.jobs[0].blocked.reason | default: 'none' }}"
+      action: >-
+        {%- assign js = steps.job_stats.output.jobs[0].state -%}
+        {%- assign ds = steps.datafeed_stats.output.datafeeds[0].state | default: 'missing' -%}
+        {%- assign mem = steps.job_stats.output.jobs[0].model_size_stats.memory_status -%}
+        {%- assign blk = steps.job_config.output.jobs[0].blocked.reason | default: 'none' -%}
+        {%- assign n = steps.recent_actions.output.values[0][0] | default: 0 | plus: 0 -%}
+        {%- assign e = steps.recent_escalations.output.values[0][0] | default: 0 | plus: 0 -%}
+        {%- if blk != "none" and js != "closed" -%}{%- assign a = "escalate_blocked" -%}
+        {%- elsif mem == "hard_limit" and js != "closed" -%}{%- assign a = "escalate_memory" -%}
+        {%- elsif js == "failed" and n >= consts.max_auto_actions_24h -%}{%- assign a = "escalate_loop" -%}
+        {%- elsif js == "opened" and ds == "stopped" and n >= consts.max_auto_actions_24h -%}{%- assign a = "escalate_loop" -%}
+        {%- elsif js == "failed" -%}{%- assign a = "restart_failed_job" -%}
+        {%- elsif js == "opened" and ds == "stopped" -%}{%- assign a = "start_datafeed" -%}
+        {%- elsif js == "closed" -%}{%- assign a = "none_closed" -%}
+        {%- else -%}{%- assign a = "none_healthy" -%}
+        {%- endif -%}
+        {%- if a contains "escalate" and e > 0 -%}suppressed_{{ a }}{%- else -%}{{ a }}{%- endif -%}
+
+  # ---------- safe fix: failed job ----------
+  - name: fix_failed_job
+    type: if
+    condition: 'steps.plan.output.action: "restart_failed_job"'
+    steps:
+      - name: force_stop_datafeed
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/_ml/datafeeds/{{ steps.plan.output.datafeed_id }}/_stop"
+          body:
+            force: true
+            allow_no_match: true
+        on-failure:
+          continue: true
+      - name: force_close_job
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/_ml/anomaly_detectors/{{ inputs.job_id }}/_close"
+          body:
+            force: true
+        on-failure:
+          retry:
+            max-attempts: 2
+            delay: 10s
+          continue: true
+      - name: open_job
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/_ml/anomaly_detectors/{{ inputs.job_id }}/_open"
+        on-failure:
+          retry:
+            max-attempts: 2
+            delay: 15s
+          continue: true
+      - name: start_datafeed_after_open
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/_ml/datafeeds/{{ steps.plan.output.datafeed_id }}/_start"
+        on-failure:
+          retry:
+            max-attempts: 2
+            delay: 15s
+          continue: true
+
+  # ---------- safe fix: opened job, stopped datafeed ----------
+  - name: fix_stopped_datafeed
+    type: if
+    condition: 'steps.plan.output.action: "start_datafeed"'
+    steps:
+      - name: start_datafeed
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/_ml/datafeeds/{{ steps.plan.output.datafeed_id }}/_start"
+        on-failure:
+          retry:
+            max-attempts: 2
+            delay: 15s
+          continue: true
+
+  # ---------- verify ----------
+  - name: wait_for_settle
+    type: wait
+    if: 'steps.plan.output.action: ("restart_failed_job" or "start_datafeed")'
+    with:
+      duration: 20s
+
+  - name: job_stats_after
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/anomaly_detectors/{{ inputs.job_id }}/_stats"
+
+  - name: datafeed_stats_after
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/datafeeds/{{ steps.plan.output.datafeed_id }}/_stats"
+    on-failure:
+      continue: true
+
+  - name: result
+    type: data.set
+    with:
+      job_state_after: "{{ steps.job_stats_after.output.jobs[0].state }}"
+      datafeed_state_after: "{{ steps.datafeed_stats_after.output.datafeeds[0].state | default: 'missing' }}"
+      outcome: >-
+        {%- assign a = steps.plan.output.action -%}
+        {%- assign js = steps.job_stats_after.output.jobs[0].state -%}
+        {%- assign ds = steps.datafeed_stats_after.output.datafeeds[0].state -%}
+        {%- if a == "restart_failed_job" or a == "start_datafeed" -%}
+        {%- if js == "opened" and ds == "started" -%}applied{%- else -%}failed{%- endif -%}
+        {%- elsif a contains "suppressed" -%}suppressed
+        {%- elsif a contains "escalate" -%}escalated
+        {%- else -%}no_action
+        {%- endif -%}
+
+  # ---------- escalate: case + agent diagnosis ----------
+  - name: escalate
+    type: if
+    condition: 'steps.result.output.outcome: ("escalated" or "failed")'
+    steps:
+      - name: find_case
+        type: cases.findCases
+        with:
+          owner: "{{ consts.case_owner }}"
+          tags: ["ml-job:{{ inputs.job_id }}"]
+          status: open
+          perPage: 1
+      - name: create_case
+        type: cases.createCase
+        if: "steps.find_case.output.total: 0"
+        with:
+          owner: "{{ consts.case_owner }}"
+          title: "ML job needs attention: {{ inputs.job_id }}"
+          description: >-
+            Opened automatically by the ML AD - Remediate Job workflow.
+            Job {{ inputs.job_id }} could not be fixed automatically
+            (action: {{ steps.plan.output.action }}, outcome: {{ steps.result.output.outcome }}).
+            Job state {{ steps.plan.output.job_state }} -> {{ steps.result.output.job_state_after }},
+            datafeed {{ steps.plan.output.datafeed_state }} -> {{ steps.result.output.datafeed_state_after }},
+            memory_status {{ steps.plan.output.memory_status }}.
+          severity: medium
+          tags: ["ml-remediation", "ml-job:{{ inputs.job_id }}"]
+          settings:
+            syncAlerts: false
+      - name: case_ref
+        type: data.set
+        with:
+          case_id: >-
+            {%- if steps.find_case.output.total > 0 -%}{{ steps.find_case.output.cases[0].id }}
+            {%- else -%}{{ steps.create_case.output.case.id }}{%- endif -%}
+      - name: diagnose
+        type: ai.agent
+        agent-id: ml-job-remediator
+        with:
+          message: >-
+            DIAGNOSE ONLY - do not change anything. Anomaly detection job {{ inputs.job_id }}
+            needs a human decision. Automated action: {{ steps.plan.output.action }};
+            outcome: {{ steps.result.output.outcome }}. Before: job {{ steps.plan.output.job_state }},
+            datafeed {{ steps.plan.output.datafeed_state }}, memory {{ steps.plan.output.memory_status }},
+            blocked: {{ steps.plan.output.blocked_reason }}, auto-fixes in last 24h: {{ steps.plan.output.recent_auto_actions }}. After: job
+            {{ steps.result.output.job_state_after }}, datafeed {{ steps.result.output.datafeed_state_after }}.
+            Use the job messages, memory health and datafeed config tools to find the root cause.
+            Reply in markdown with: Root cause, Evidence, Recommended fix (exact API calls), Risk.
+        on-failure:
+          continue: true
+      - name: comment
+        type: cases.addComment
+        on-failure:
+          continue: true
+        with:
+          case_id: "{{ steps.case_ref.output.case_id }}"
+          comment: |
+            **Automated remediation run** ({{ inputs.source }}, execution {{ execution.id }})
+            - Action: `{{ steps.plan.output.action }}` -> outcome `{{ steps.result.output.outcome }}`
+            - Job: {{ steps.plan.output.job_state }} -> {{ steps.result.output.job_state_after }}; datafeed: {{ steps.plan.output.datafeed_state }} -> {{ steps.result.output.datafeed_state_after }}; memory: {{ steps.plan.output.memory_status }}; blocked: {{ steps.plan.output.blocked_reason }}
+
+            **Agent diagnosis**
+
+            {{ steps.diagnose.output.message | default: "(agent diagnosis unavailable)" }}
+
+  # ---------- log ----------
+  - name: log
+    type: elasticsearch.index
+    with:
+      index: ml-remediation-log
+      document:
+        job_id: "{{ inputs.job_id }}"
+        datafeed_id: "{{ steps.plan.output.datafeed_id }}"
+        issue: "{{ steps.plan.output.job_state }}/{{ steps.plan.output.datafeed_state }}/{{ steps.plan.output.memory_status }}"
+        action: "{{ steps.plan.output.action }}"
+        outcome: "{{ steps.result.output.outcome }}"
+        auto: true
+        job_state_before: "{{ steps.plan.output.job_state }}"
+        datafeed_state_before: "{{ steps.plan.output.datafeed_state }}"
+        source: "{{ inputs.source }}"
+        workflow_id: "{{ workflow.id }}"
+        execution_id: "{{ execution.id }}"
+        case_id: "{{ steps.case_ref.output.case_id | default: '' }}"
+
+  - name: output
+    type: workflow.output
+    with:
+      job_id: "{{ inputs.job_id }}"
+      action: "{{ steps.plan.output.action }}"
+      outcome: "{{ steps.result.output.outcome }}"
+      job_state: "{{ steps.plan.output.job_state }} -> {{ steps.result.output.job_state_after }}"
+      datafeed_state: "{{ steps.plan.output.datafeed_state }} -> {{ steps.result.output.datafeed_state_after }}"

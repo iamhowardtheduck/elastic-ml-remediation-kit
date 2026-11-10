@@ -1,0 +1,18 @@
+{
+  "id": "ml_notification_triage",
+  "type": "esql",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "description": "Cluster-wide triage of ML job problems: counts warning/error notifications per job and message type over the last N hours from .ml-notifications-*. Start here to see which jobs are failing and why (delayed data, no data, datafeed extraction errors, no node to start, memory).",
+  "configuration": {
+    "query": "FROM .ml-notifications-* | WHERE DATE_DIFF(\"hour\", timestamp, NOW()) < ?hours AND level IN (\"warning\", \"error\") AND job_type == \"anomaly_detector\" | EVAL kind = CASE(message LIKE \"*ingest latency*\", \"delayed_data\", message LIKE \"*no data*\", \"no_data\", message LIKE \"*extracting data*\", \"extraction_error\", message LIKE \"*No node found*\", \"no_node\", message LIKE \"*memory*\", \"memory\", message LIKE \"*flushing*\", \"flush_error\", \"other\") | STATS n = COUNT(*), latest = MAX(timestamp), example = MAX(message) BY job_id, level, kind | SORT n DESC | LIMIT 100",
+    "params": {
+      "hours": {
+        "type": "integer",
+        "description": "Look-back window in hours (e.g. 24)"
+      }
+    }
+  }
+}

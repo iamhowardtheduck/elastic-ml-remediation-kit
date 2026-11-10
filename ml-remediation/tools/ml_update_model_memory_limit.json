@@ -1,0 +1,15 @@
+{
+  "id": "ml_update_model_memory_limit",
+  "type": "workflow",
+  "description": "Change a job's model_memory_limit (job must be closed). REQUIRES USER APPROVAL. Run ad_estimate_memory_requirement first.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_update_model_memory_limit@@"
+  },
+  "confirmation": {
+    "askUser": "always"
+  }
+}

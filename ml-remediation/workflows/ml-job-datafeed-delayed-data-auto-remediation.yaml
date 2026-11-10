@@ -1,0 +1,203 @@
+name: ML Job Datafeed Delayed-Data Auto-Remediation
+description: >-
+  Triggered by the "ML Notifications - Delayed Data Detected" rule (one alert per job).
+  Raises the affected datafeed's query_delay by 1.5x (at least +60s), capped at 15 minutes,
+  restarting the datafeed only if it was running. At the cap it stops changing the delay and
+  escalates once per 24h to a Kibana Case with an agent diagnosis, since sustained ingest
+  latency beyond 15m needs fixing upstream. Missed documents are NOT backfilled - a restarted
+  datafeed resumes after the job's latest processed record. Every decision goes to
+  ml-remediation-log.
+enabled: true
+tags: ["ml", "anomaly-detection", "remediation", "delayed-data"]
+
+triggers:
+  - type: alert
+  - type: manual
+
+consts:
+  max_query_delay_seconds: 900
+  case_owner: cases
+
+steps:
+  - name: per_job
+    type: foreach
+    foreach: "{{ event.alerts }}"
+    steps:
+      - name: job
+        type: data.set
+        with:
+          job_id: "{{ foreach.item.kibana.alert.grouping.job_id }}"
+          datafeed_id: "datafeed-{{ foreach.item.kibana.alert.grouping.job_id }}"
+          message: "{{ foreach.item.kibana.alert.grouping.message }}"
+
+      - name: datafeed
+        type: elasticsearch.request
+        with:
+          method: GET
+          path: "/_ml/datafeeds/{{ steps.job.output.datafeed_id }}"
+
+      - name: datafeed_stats
+        type: elasticsearch.request
+        with:
+          method: GET
+          path: "/_ml/datafeeds/{{ steps.job.output.datafeed_id }}/_stats"
+
+      - name: recent_escalations
+        type: elasticsearch.esql.query
+        with:
+          query: >-
+            FROM ml-remediation-log
+            | WHERE job_id == "{{ steps.job.output.job_id }}" AND action == "escalate_query_delay_cap"
+              AND @timestamp > NOW() - 24 hours
+            | STATS n = COUNT(*)
+        on-failure:
+          continue: true
+
+      - name: plan
+        type: data.set
+        with:
+          current: "{{ steps.datafeed.output.datafeeds[0].query_delay }}"
+          was_started: "{{ steps.datafeed_stats.output.datafeeds[0].state }}"
+          current_seconds: >-
+            {%- assign c = steps.datafeed.output.datafeeds[0].query_delay | default: "60s" -%}
+            {%- if c contains "ms" -%}{{ c | remove: "ms" | plus: 0 | divided_by: 1000 | round }}
+            {%- elsif c contains "h" -%}{{ c | remove: "h" | plus: 0 | times: 3600 }}
+            {%- elsif c contains "m" -%}{{ c | remove: "m" | plus: 0 | times: 60 }}
+            {%- elsif c contains "s" -%}{{ c | remove: "s" | plus: 0 }}
+            {%- else -%}{{ c | plus: 0 | divided_by: 1000 | round }}{%- endif -%}
+          new_seconds: >-
+            {%- assign c = steps.datafeed.output.datafeeds[0].query_delay | default: "60s" -%}
+            {%- if c contains "ms" -%}{%- assign s = c | remove: "ms" | plus: 0 | divided_by: 1000 | round -%}
+            {%- elsif c contains "h" -%}{%- assign s = c | remove: "h" | plus: 0 | times: 3600 -%}
+            {%- elsif c contains "m" -%}{%- assign s = c | remove: "m" | plus: 0 | times: 60 -%}
+            {%- elsif c contains "s" -%}{%- assign s = c | remove: "s" | plus: 0 -%}
+            {%- else -%}{%- assign s = c | plus: 0 | divided_by: 1000 | round -%}{%- endif -%}
+            {%- assign up = s | times: 1.5 | round -%}
+            {%- assign plus60 = s | plus: 60 -%}
+            {%- if plus60 > up -%}{%- assign up = plus60 -%}{%- endif -%}
+            {{ up | at_most: consts.max_query_delay_seconds }}
+          action: >-
+            {%- assign c = steps.datafeed.output.datafeeds[0].query_delay | default: "60s" -%}
+            {%- if c contains "ms" -%}{%- assign s = c | remove: "ms" | plus: 0 | divided_by: 1000 | round -%}
+            {%- elsif c contains "h" -%}{%- assign s = c | remove: "h" | plus: 0 | times: 3600 -%}
+            {%- elsif c contains "m" -%}{%- assign s = c | remove: "m" | plus: 0 | times: 60 -%}
+            {%- elsif c contains "s" -%}{%- assign s = c | remove: "s" | plus: 0 -%}
+            {%- else -%}{%- assign s = c | plus: 0 | divided_by: 1000 | round -%}{%- endif -%}
+            {%- assign n = steps.recent_escalations.output.values[0][0] | default: 0 | plus: 0 -%}
+            {%- if s >= consts.max_query_delay_seconds and n > 0 -%}suppressed
+            {%- elsif s >= consts.max_query_delay_seconds -%}escalate_query_delay_cap
+            {%- else -%}raise_query_delay{%- endif -%}
+
+      - name: raise
+        type: if
+        condition: 'steps.plan.output.action: "raise_query_delay"'
+        steps:
+          - name: stop_datafeed
+            type: elasticsearch.request
+            if: 'steps.plan.output.was_started: "started"'
+            with:
+              method: POST
+              path: "/_ml/datafeeds/{{ steps.job.output.datafeed_id }}/_stop"
+            on-failure:
+              retry:
+                max-attempts: 3
+                delay: 5s
+          - name: update_datafeed
+            type: elasticsearch.request
+            with:
+              method: POST
+              path: "/_ml/datafeeds/{{ steps.job.output.datafeed_id }}/_update"
+              body:
+                query_delay: "{{ steps.plan.output.new_seconds }}s"
+          - name: start_datafeed
+            type: elasticsearch.request
+            if: 'steps.plan.output.was_started: "started"'
+            with:
+              method: POST
+              path: "/_ml/datafeeds/{{ steps.job.output.datafeed_id }}/_start"
+            on-failure:
+              retry:
+                max-attempts: 3
+                delay: 10s
+
+      - name: escalate
+        type: if
+        condition: 'steps.plan.output.action: "escalate_query_delay_cap"'
+        steps:
+          - name: find_case
+            type: cases.findCases
+            with:
+              owner: "{{ consts.case_owner }}"
+              tags: ["ml-job:{{ steps.job.output.job_id }}"]
+              status: open
+              perPage: 1
+          - name: create_case
+            type: cases.createCase
+            if: "steps.find_case.output.total: 0"
+            with:
+              owner: "{{ consts.case_owner }}"
+              title: "ML job needs attention: {{ steps.job.output.job_id }}"
+              description: >-
+                Datafeed {{ steps.job.output.datafeed_id }} keeps missing documents due to ingest
+                latency even with query_delay at the {{ consts.max_query_delay_seconds }}s cap.
+                Fix the ingest latency upstream or raise the cap deliberately.
+              severity: medium
+              tags: ["ml-remediation", "ml-job:{{ steps.job.output.job_id }}"]
+              settings:
+                syncAlerts: false
+          - name: case_ref
+            type: data.set
+            with:
+              case_id: >-
+                {%- if steps.find_case.output.total > 0 -%}{{ steps.find_case.output.cases[0].id }}
+                {%- else -%}{{ steps.create_case.output.case.id }}{%- endif -%}
+          - name: diagnose
+            type: ai.agent
+            agent-id: ml-job-remediator
+            with:
+              message: >-
+                DIAGNOSE ONLY - do not change anything. Datafeed {{ steps.job.output.datafeed_id }}
+                (job {{ steps.job.output.job_id }}) keeps missing documents due to ingest latency with
+                query_delay already at {{ steps.plan.output.current }} (cap {{ consts.max_query_delay_seconds }}s).
+                Latest message: "{{ steps.job.output.message }}". Estimate the real ingest latency of the
+                datafeed's source indices and identify where the delay comes from.
+            on-failure:
+              continue: true
+          - name: comment
+            type: cases.addComment
+            on-failure:
+              continue: true
+            with:
+              case_id: "{{ steps.case_ref.output.case_id }}"
+              comment: |
+                **query_delay cap reached** for `{{ steps.job.output.datafeed_id }}` (execution {{ execution.id }}).
+                Current query_delay {{ steps.plan.output.current }}; latest warning: {{ steps.job.output.message }}
+
+                **Agent diagnosis**
+
+                {{ steps.diagnose.output.message | default: "(agent diagnosis unavailable)" }}
+
+      - name: log
+        type: elasticsearch.index
+        with:
+          index: ml-remediation-log
+          document:
+            job_id: "{{ steps.job.output.job_id }}"
+            datafeed_id: "{{ steps.job.output.datafeed_id }}"
+            issue: delayed_data
+            action: "{{ steps.plan.output.action }}"
+            outcome: >-
+              {%- if steps.plan.output.action == "raise_query_delay" -%}applied
+              {%- elsif steps.plan.output.action == "suppressed" -%}no_action
+              {%- else -%}escalated{%- endif -%}
+            auto: true
+            datafeed_state_before: "{{ steps.plan.output.was_started }}"
+            query_delay_before: "{{ steps.plan.output.current }}"
+            query_delay_after: >-
+              {%- if steps.plan.output.action == "raise_query_delay" -%}{{ steps.plan.output.new_seconds }}s
+              {%- else -%}{{ steps.plan.output.current }}{%- endif -%}
+            detail: "{{ steps.job.output.message }}"
+            source: alert
+            workflow_id: "{{ workflow.id }}"
+            execution_id: "{{ execution.id }}"
+            case_id: "{{ steps.case_ref.output.case_id | default: '' }}"

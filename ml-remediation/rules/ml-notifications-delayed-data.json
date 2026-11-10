@@ -1,0 +1,48 @@
+{
+  "name": "ML Notifications - Delayed Data Detected",
+  "schedule": {
+    "interval": "15m"
+  },
+  "tags": [
+    "ml",
+    "datafeed-remediation"
+  ],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "FROM .ml-notifications*\n| WHERE level == \"warning\" AND job_type == \"anomaly_detector\" AND message LIKE \"*missed*\" AND message LIKE \"*ingest latency*\"\n| STATS warnings = COUNT(*), latest = MAX(timestamp), message = MAX(message) BY job_id"
+    },
+    "timeField": "timestamp",
+    "size": 100,
+    "thresholdComparator": ">",
+    "threshold": [
+      0
+    ],
+    "timeWindowSize": 15,
+    "timeWindowUnit": "m",
+    "groupBy": "row",
+    "excludeHitsFromPreviousRun": true,
+    "sourceFields": [],
+    "aggType": "count",
+    "termSize": 5
+  },
+  "actions": [
+    {
+      "id": "system-connector-.workflows",
+      "params": {
+        "subAction": "run",
+        "subActionParams": {
+          "workflowId": "@@workflow:ML Job Datafeed Delayed-Data Auto-Remediation@@",
+          "summaryMode": true,
+          "alertStates": {
+            "new": true,
+            "ongoing": true,
+            "recovered": false
+          }
+        }
+      }
+    }
+  ],
+  "rule_type_id": ".es-query",
+  "consumer": "alerts"
+}

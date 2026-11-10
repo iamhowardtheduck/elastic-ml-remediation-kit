@@ -1,0 +1,15 @@
+{
+  "id": "ml_get_job_datafeed_config",
+  "type": "workflow",
+  "description": "Read the full job and datafeed configuration (bucket_span, detectors, query_delay, indices, query).",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_get_job_datafeed_config@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

@@ -1,0 +1,68 @@
+name: ML AD - Health Sweep
+description: >-
+  Every 15 minutes (and whenever the "ML Notifications - Job/Datafeed Errors" rule fires)
+  checks the live state of every anomaly detection job and runs "ML AD - Remediate Job" for
+  each job that is failed, opened with a stopped datafeed, or at memory hard_limit.
+  Closed jobs are ignored (treated as intentionally closed). Works from job state, not
+  message text, so it also catches failures that never produced a notification.
+enabled: true
+tags: ["ml", "anomaly-detection", "remediation"]
+
+triggers:
+  - type: scheduled
+    with:
+      every: 15m
+  - type: alert
+  - type: manual
+
+steps:
+  - name: jobs
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/anomaly_detectors/_stats?filter_path=jobs.job_id,jobs.state,jobs.model_size_stats.memory_status"
+
+  - name: datafeeds
+    type: elasticsearch.request
+    with:
+      method: GET
+      path: "/_ml/datafeeds/_stats?filter_path=datafeeds.datafeed_id,datafeeds.state"
+
+  - name: select
+    type: data.set
+    with:
+      candidates: >-
+        {%- assign out = "" -%}
+        {%- for j in steps.jobs.output.jobs -%}
+          {%- assign dfid = "datafeed-" | append: j.job_id -%}
+          {%- assign ds = "missing" -%}
+          {%- for d in steps.datafeeds.output.datafeeds -%}
+            {%- if d.datafeed_id == dfid -%}{%- assign ds = d.state -%}{%- endif -%}
+          {%- endfor -%}
+          {%- assign pick = false -%}
+          {%- if j.state == "failed" -%}{%- assign pick = true -%}{%- endif -%}
+          {%- if j.state == "opened" and ds == "stopped" -%}{%- assign pick = true -%}{%- endif -%}
+          {%- if j.state == "opened" and j.model_size_stats.memory_status == "hard_limit" -%}{%- assign pick = true -%}{%- endif -%}
+          {%- if pick -%}{%- assign out = out | append: j.job_id | append: "," -%}{%- endif -%}
+        {%- endfor -%}
+        {{ out }}
+
+  - name: remediate_each
+    type: foreach
+    foreach: '${{ steps.select.output.candidates | split: "," | compact }}'
+    steps:
+      - name: remediate
+        type: workflow.execute
+        if: 'not foreach.item: ""'
+        with:
+          workflow-id: @@workflow:ML AD - Remediate Job@@
+          inputs:
+            job_id: "{{ foreach.item }}"
+            source: sweep
+        on-failure:
+          continue: true
+
+  - name: summary
+    type: console
+    with:
+      message: "ML health sweep: candidates [{{ steps.select.output.candidates }}]"

@@ -1,0 +1,15 @@
+{
+  "id": "ml_preview_datafeed",
+  "type": "workflow",
+  "description": "Preview what a datafeed returns right now (read-only); use after config changes or for 'no data' problems.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_preview_datafeed_with_latency@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

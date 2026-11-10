@@ -1,0 +1,13 @@
+{
+  "id": "ml-memory-and-model",
+  "name": "ml-memory-and-model",
+  "description": "Handle anomaly detection model memory and model state: memory health and growth, memory estimation, model_memory_limit changes, model snapshots and reverts. All changes here require user approval.",
+  "tool_ids": [
+    "ad_ts_model_memory_health",
+    "ml_estimate_memory",
+    "ml_update_model_memory_limit",
+    "ad_get_model_snapshots",
+    "ml_revert_model_snapshot"
+  ],
+  "content": "# Memory and model state\n\n**Every change in this skill needs explicit user approval** (the change tools ask for confirmation).\n\n## Memory\n- `ad_ts_model_memory_health` (job_id, limit=1 for current, 500 for trend) - model_bytes vs limit, memory_status, field counts.\n  - `total_by_field_count` > 100k, `total_partition_field_count` > 10k or `total_category_count` > 10k = cardinality is the driver. Raising memory only buys time; recommend splitting the job or filtering the datafeed.\n- `ml_estimate_memory` - estimate from real source cardinality. Prefer it over `peak_model_bytes * 1.3`.\n- `ml_update_model_memory_limit` - lifecycle: stop datafeed -> close job -> update -> open job -> start datafeed.\n- hard_limit corrupts model state and drops data. Fix it before anything else.\n\n## Model snapshots\n- `ad_get_model_snapshots` - list snapshots (id, timestamp, latest_record_time).\n- `ml_revert_model_snapshot` - roll back to a known-good snapshot taken before a corrupted period. Results after the snapshot are discarded.\n- A stale `blocked.reason: revert` (job cannot open, \"executing [revert]\") means an earlier revert never finished. First check the task (`GET _tasks/<task_id>`). Only after the user agrees, cancel it, or revert again to the newest good snapshot.\n\nAlways present: evidence, the exact change, and its risk. Then ask."
+}

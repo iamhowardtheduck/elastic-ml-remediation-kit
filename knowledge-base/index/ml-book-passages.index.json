@@ -1,0 +1,33 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  },
+  "mappings": {
+    "properties": {
+      "book": {
+        "type": "keyword"
+      },
+      "chapter": {
+        "type": "integer"
+      },
+      "chapter_title": {
+        "type": "keyword"
+      },
+      "page": {
+        "type": "integer"
+      },
+      "part": {
+        "type": "integer"
+      },
+      "content": {
+        "type": "text",
+        "copy_to": "content_semantic"
+      },
+      "content_semantic": {
+        "type": "semantic_text",
+        "inference_id": "@@inference_id@@"
+      }
+    }
+  }
+}

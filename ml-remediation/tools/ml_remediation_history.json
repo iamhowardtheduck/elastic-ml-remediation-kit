@@ -1,0 +1,18 @@
+{
+  "id": "ml_remediation_history",
+  "type": "esql",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "description": "History of automated and manual remediation actions taken on anomaly detection jobs (from the ml-remediation-log index): action, outcome, before-state, linked case. Use before acting on a job to see what was already tried and whether the loop guard (3 auto-fixes per 24h) is in effect. Pass job_id '*' for all jobs.",
+  "configuration": {
+    "query": "FROM ml-remediation-log | WHERE ?job_id == \"*\" OR job_id == ?job_id | WHERE @timestamp > NOW() - 7 days | SORT @timestamp DESC | KEEP @timestamp, job_id, action, outcome, issue, source, query_delay_before, query_delay_after, case_id, execution_id | LIMIT 50",
+    "params": {
+      "job_id": {
+        "type": "string",
+        "description": "Anomaly detection job ID, or * for all jobs"
+      }
+    }
+  }
+}

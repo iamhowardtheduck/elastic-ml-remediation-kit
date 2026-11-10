@@ -1,0 +1,18 @@
+{
+  "id": "ml_book_search",
+  "type": "esql",
+  "tags": [
+    "ml",
+    "knowledge"
+  ],
+  "description": "Search the book 'Machine Learning with the Elastic Stack' (Collier & Azarmi, Packt 2019), the reference on designing Elastic anomaly detection jobs: bucket_span, detector functions, by/over/partition fields, influencers, population analysis, categorization, datafeeds and query_delay, model memory and job sizing, calendars, forecasting, alerting. Hybrid semantic + keyword search. Returns the 5 most relevant pages with chapter and page numbers for citation. Ask in natural language.",
+  "configuration": {
+    "query": "FROM ml-book-passages METADATA _id, _index, _score\n| FORK (WHERE MATCH(content_semantic, ?query) | SORT _score DESC | LIMIT 10)\n       (WHERE MATCH(content, ?query) | SORT _score DESC | LIMIT 10)\n| FUSE\n| SORT _score DESC\n| LIMIT 5\n| KEEP chapter, chapter_title, page, content",
+    "params": {
+      "query": {
+        "type": "string",
+        "description": "Natural-language question or topic, e.g. 'how to choose bucket_span for sparse data'"
+      }
+    }
+  }
+}

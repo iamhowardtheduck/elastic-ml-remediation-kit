@@ -1,0 +1,13 @@
+{
+  "id": "ml-delayed-data",
+  "name": "ml-delayed-data",
+  "description": "Fix anomaly detection datafeeds that miss documents due to ingest latency: estimate real ingest latency, inspect delayed-data annotations and bucket gaps, and right-size query_delay.",
+  "tool_ids": [
+    "ad_ts_ingest_latency_estimate",
+    "ad_ts_delayed_data_annotations",
+    "ad_ts_bucket_event_gaps",
+    "ml_troubleshoot_query_delay",
+    "ml_update_query_delay"
+  ],
+  "content": "# Delayed data / missed documents\n\nSymptom: \"Datafeed has missed N documents due to ingest latency, latest bucket with missing data is [...]\".\n\n1. `ad_ts_ingest_latency_estimate` - P50/P95 ingest lag of the datafeed's source.\n2. `ad_ts_delayed_data_annotations` and `ad_ts_bucket_event_gaps` - how often and how much is missed.\n3. `ml_troubleshoot_query_delay` - full decision tree when the cause is unclear.\n4. Fix with `ml_update_query_delay` (stop the datafeed, update, restart):\n   - target = P95 ingest latency + 60s\n   - at most 1.5x the current value per change\n   - **up to 15m: apply without asking; above 15m: ask the user**\n\nquery_delay values come back in milliseconds (e.g. `74457ms`). Convert before comparing.\nA larger query_delay delays anomaly results by the same amount - say so.\nIf latency is above 15m, the real fix is upstream (ingest pipeline, agent backlog, Logstash): report where the lag comes from rather than raising the cap.\nFix memory problems before query_delay: a job at hard_limit drops data and looks like missed documents."
+}

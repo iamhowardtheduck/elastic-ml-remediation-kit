@@ -1,0 +1,97 @@
+name: Logstash Queue Backlog - Diagnose
+description: >-
+  Triggered by the "Logstash persistent queue backing up" rule. For each pipeline whose persistent
+  queue passed 5 GB (or 25% of its max), opens or updates a Kibana Case tagged
+  logstash-pipeline:<name> and asks the Ingest Steward agent for a read-only diagnosis (what is
+  slowing the Elasticsearch output: write queues, hot nodes, shard recoveries, ILM rollovers or
+  migrations, rejections). A full queue makes Logstash apply backpressure to Elastic Agents, which
+  delays data and causes ML datafeeds to miss documents.
+enabled: true
+tags: ["logstash", "ingest", "ingest-hardening"]
+
+triggers:
+  - type: alert
+  - type: manual
+
+consts:
+  case_owner: cases
+
+steps:
+  - name: per_pipeline
+    type: foreach
+    foreach: "{{ event.alerts }}"
+    steps:
+      - name: info
+        type: data.set
+        with:
+          pipeline: "{{ foreach.item.kibana.alert.grouping.pipeline }}"
+          host: "{{ foreach.item.kibana.alert.grouping.host }}"
+          queue_gb: "{{ foreach.item.kibana.alert.grouping.queue_gb }}"
+          queue_pct: "{{ foreach.item.kibana.alert.grouping.queue_pct }}"
+          in_eps: "{{ foreach.item.kibana.alert.grouping.in_eps }}"
+          out_eps: "{{ foreach.item.kibana.alert.grouping.out_eps }}"
+          backpressure: "{{ foreach.item.kibana.alert.grouping.backpressure }}"
+
+      - name: find_case
+        type: cases.findCases
+        with:
+          owner: "{{ consts.case_owner }}"
+          tags: ["logstash-pipeline:{{ steps.info.output.pipeline }}"]
+          status: open
+          perPage: 1
+
+      - name: create_case
+        type: cases.createCase
+        if: "steps.find_case.output.total: 0"
+        with:
+          owner: "{{ consts.case_owner }}"
+          title: "Logstash queue backing up: {{ steps.info.output.pipeline }} on {{ steps.info.output.host }}"
+          description: >-
+            The persistent queue of Logstash pipeline {{ steps.info.output.pipeline }} on
+            {{ steps.info.output.host }} reached {{ steps.info.output.queue_gb }} GB
+            ({{ steps.info.output.queue_pct }}% of max). When it fills, Logstash applies backpressure
+            to Elastic Agents and data arrives late (ML datafeeds then miss documents).
+            A common cause: many data streams rolling over and migrating to warm at the same time.
+          severity: high
+          tags: ["ingest-hardening", "logstash-pipeline:{{ steps.info.output.pipeline }}"]
+          settings:
+            syncAlerts: false
+
+      - name: case_ref
+        type: data.set
+        with:
+          case_id: >-
+            {%- if steps.find_case.output.total > 0 -%}{{ steps.find_case.output.cases[0].id }}
+            {%- else -%}{{ steps.create_case.output.case.id }}{%- endif -%}
+
+      - name: diagnose
+        type: ai.agent
+        agent-id: ingest-steward
+        with:
+          message: >-
+            DIAGNOSE ONLY - do not change anything. The Logstash pipeline
+            "{{ steps.info.output.pipeline }}" on {{ steps.info.output.host }} has a persistent queue
+            of {{ steps.info.output.queue_gb }} GB ({{ steps.info.output.queue_pct }}% of max);
+            input {{ steps.info.output.in_eps }} eps vs output {{ steps.info.output.out_eps }} eps,
+            backpressure {{ steps.info.output.backpressure }}. Its Elasticsearch output is slower than
+            its input. Over the last 2 hours, check: write thread pool queues and rejections per node,
+            indexing latency per hot node, shard recoveries/relocations (PEER) and ILM actions
+            (rollover, migrate, forcemerge) via ES|QL `FROM ilm-history-*`, and disk I/O on the hot tier.
+            Reply in markdown: Root cause, Evidence, Recommended fix, Urgency. Under 300 words.
+        on-failure:
+          continue: true
+
+      - name: comment
+        type: cases.addComment
+        on-failure:
+          continue: true
+        with:
+          case_id: "{{ steps.case_ref.output.case_id }}"
+          comment: |
+            **Queue alert** (execution {{ execution.id }}): `{{ steps.info.output.pipeline }}` on {{ steps.info.output.host }}
+            - Queue: {{ steps.info.output.queue_gb }} GB ({{ steps.info.output.queue_pct }}% of max), backpressure {{ steps.info.output.backpressure }}
+            - Throughput: in {{ steps.info.output.in_eps }} eps / out {{ steps.info.output.out_eps }} eps
+
+            **Ingest Steward diagnosis**
+
+            {{ steps.diagnose.output.message | default: "(agent diagnosis unavailable)" }}

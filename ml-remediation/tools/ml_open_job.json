@@ -1,0 +1,15 @@
+{
+  "id": "ml_open_job",
+  "type": "workflow",
+  "description": "Open a closed anomaly detection job.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_open_job@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

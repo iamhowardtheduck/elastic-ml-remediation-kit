@@ -1,0 +1,13 @@
+{
+  "id": "ml-job-recovery",
+  "name": "ml-job-recovery",
+  "description": "Bring failed anomaly detection jobs and stopped datafeeds back: safe automated restart of failed jobs, starting/stopping datafeeds, opening jobs, previewing datafeed output for 'no data' problems, and ad-hoc ES|QL checks.",
+  "tool_ids": [
+    "ml_remediate_job",
+    "ml_manage_datafeed",
+    "ml_open_job",
+    "ml_preview_datafeed",
+    "platform.core.execute_esql"
+  ],
+  "content": "# ML job recovery\n\n## Safe - apply without asking\n- Job `failed`, or job `opened` with datafeed `stopped`: `ml_remediate_job` (job_id, source=\"agent\"). It stops the datafeed, force-closes, reopens, restarts, verifies, and logs to `ml-remediation-log`. It escalates by itself (Kibana Case + diagnosis) when the job is blocked, at memory hard_limit, or after 3 auto-fixes in 24h.\n- `ml_manage_datafeed` (datafeed_id `datafeed-<job_id>`, action `_start`/`_stop`) as part of a fix.\n\n## Ask first\n- `ml_open_job` on a job that is `closed` - closed jobs are usually intentional.\n\n## When it does not work\n- \"Cannot open job ... because it is executing [revert]\" / `blocked.reason: revert`: a stale model-snapshot revert. Do NOT retry. Recommend: `GET _tasks/<blocked.task_id>`; if it is gone or orphaned, cancel it and reopen. Load ml-memory-and-model for snapshot options.\n- \"retrieving no data\": run `ml_preview_datafeed`. If it returns nothing, use `platform.core.execute_esql` against the datafeed indices (e.g. `FROM <index> | STATS max(@timestamp)`) to find when data stopped, and report the upstream cause. Restarting will not help.\n\nMissed documents are never backfilled: a restarted datafeed resumes after the job's latest processed record.\nAfter any change, verify that the job is opened and the datafeed is started."
+}

@@ -1,0 +1,48 @@
+{
+  "name": "Logstash persistent queue backing up",
+  "rule_type_id": ".es-query",
+  "consumer": "alerts",
+  "schedule": {
+    "interval": "5m"
+  },
+  "tags": [
+    "logstash",
+    "ingest-hardening"
+  ],
+  "params": {
+    "searchType": "esqlQuery",
+    "esqlQuery": {
+      "esql": "FROM metrics-logstash.pipeline-*\n| WHERE logstash.pipeline.total.queues.type == \"persisted\"\n| EVAL pipeline = logstash.pipeline.name, host = logstash.pipeline.host.name\n| STATS queue_bytes = MAX(logstash.pipeline.total.queues.current_size.bytes), max_bytes = MAX(logstash.pipeline.total.queues.max_size.bytes), backpressure = ROUND(MAX(logstash.pipeline.total.flow.queue_backpressure.current), 2), in_eps = ROUND(AVG(logstash.pipeline.total.flow.input_throughput.current)), out_eps = ROUND(AVG(logstash.pipeline.total.flow.output_throughput.current)) BY pipeline, host\n| EVAL queue_gb = ROUND(queue_bytes / 1073741824.0, 2), queue_pct = ROUND(100.0 * queue_bytes / max_bytes, 1)\n| WHERE queue_bytes > 5368709120 OR queue_pct > 25\n| EVAL queue_gb = TO_STRING(queue_gb), queue_pct = TO_STRING(queue_pct), backpressure = TO_STRING(backpressure), in_eps = TO_STRING(in_eps), out_eps = TO_STRING(out_eps)\n| KEEP pipeline, host, queue_gb, queue_pct, backpressure, in_eps, out_eps"
+    },
+    "timeField": "@timestamp",
+    "timeWindowSize": 5,
+    "timeWindowUnit": "m",
+    "threshold": [
+      0
+    ],
+    "thresholdComparator": ">",
+    "size": 100,
+    "groupBy": "row",
+    "aggType": "count",
+    "termSize": 5,
+    "sourceFields": [],
+    "excludeHitsFromPreviousRun": false
+  },
+  "actions": [
+    {
+      "id": "system-connector-.workflows",
+      "params": {
+        "subAction": "run",
+        "subActionParams": {
+          "workflowId": "@@workflow:Logstash Queue Backlog - Diagnose@@",
+          "summaryMode": true,
+          "alertStates": {
+            "new": true,
+            "ongoing": false,
+            "recovered": false
+          }
+        }
+      }
+    }
+  ]
+}

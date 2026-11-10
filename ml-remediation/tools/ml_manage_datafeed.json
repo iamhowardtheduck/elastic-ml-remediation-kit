@@ -1,0 +1,15 @@
+{
+  "id": "ml_manage_datafeed",
+  "type": "workflow",
+  "description": "Start or stop a datafeed (action _start or _stop). Datafeed id is datafeed-<job_id>.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_manage_datafeed@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}

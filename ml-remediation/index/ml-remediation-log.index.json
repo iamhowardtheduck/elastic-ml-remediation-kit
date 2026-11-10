@@ -1,0 +1,60 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "index.default_pipeline": "ml-remediation-log"
+  },
+  "mappings": {
+    "dynamic": "false",
+    "properties": {
+      "@timestamp": {
+        "type": "date"
+      },
+      "job_id": {
+        "type": "keyword"
+      },
+      "datafeed_id": {
+        "type": "keyword"
+      },
+      "issue": {
+        "type": "keyword"
+      },
+      "action": {
+        "type": "keyword"
+      },
+      "outcome": {
+        "type": "keyword"
+      },
+      "auto": {
+        "type": "boolean"
+      },
+      "detail": {
+        "type": "text"
+      },
+      "job_state_before": {
+        "type": "keyword"
+      },
+      "datafeed_state_before": {
+        "type": "keyword"
+      },
+      "query_delay_before": {
+        "type": "keyword"
+      },
+      "query_delay_after": {
+        "type": "keyword"
+      },
+      "source": {
+        "type": "keyword"
+      },
+      "workflow_id": {
+        "type": "keyword"
+      },
+      "execution_id": {
+        "type": "keyword"
+      },
+      "case_id": {
+        "type": "keyword"
+      }
+    }
+  }
+}

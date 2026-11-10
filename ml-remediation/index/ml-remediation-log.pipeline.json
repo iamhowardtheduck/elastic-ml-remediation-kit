@@ -1,0 +1,13 @@
+{
+  "description": "Sets @timestamp at ingest for ml-remediation-log (workflow templating renders dates as JS strings)",
+  "processors": [
+    {
+      "set": {
+        "field": "@timestamp",
+        "value": "{{{_ingest.timestamp}}}",
+        "override": false,
+        "if": "ctx['@timestamp'] == null || ctx['@timestamp'] == ''"
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "ml-job-triage",
+  "name": "ml-job-triage",
+  "description": "Find which anomaly detection jobs are unhealthy and why: notification triage across all jobs, job/datafeed state, per-job messages, configuration, and what remediation was already tried. Use first for any ML job health question.",
+  "tool_ids": [
+    "ml_notification_triage",
+    "ml_remediation_history",
+    "ad_get_jobs",
+    "ad_get_job_messages",
+    "ml_get_job_datafeed_config"
+  ],
+  "content": "# ML job triage\n\nStart every ML job health question here.\n\n1. `ml_notification_triage` (hours=24) - warning/error counts per job and kind: `delayed_data`, `no_data`, `extraction_error`, `no_node`, `memory`, `flush_error`.\n2. `ad_get_jobs` - live job state (opened/closed/failed), datafeed state, memory status, `blocked.reason`.\n3. `ad_get_job_messages` (job_id) - full message timeline for one job.\n4. `ml_get_job_datafeed_config` - bucket_span, detectors, query_delay, indices, datafeed query.\n5. `ml_remediation_history` (job_id or `*`) - what automation already did; never repeat a fix that failed in the last 24h.\n\n## Classify, then load the matching skill\n| Signal | Problem | Skill |\n|---|---|---|\n| job `failed`, \"No node found to start datafeed\", opened job with stopped datafeed | job/datafeed down | ml-job-recovery |\n| \"missed N documents due to ingest latency\" | delayed data | ml-delayed-data |\n| `memory_status` soft_limit/hard_limit, model snapshot reverts, `blocked.reason: revert` | memory / model state | ml-memory-and-model |\n| \"retrieving no data for a while\" | source has no data - restart will not help | ml-job-recovery (preview the datafeed) |\n\n\"errors extracting data\" on many jobs at the same time = one cluster-side incident (node restarts, search failures). Report it once.\nClosed jobs are normally closed on purpose."
+}

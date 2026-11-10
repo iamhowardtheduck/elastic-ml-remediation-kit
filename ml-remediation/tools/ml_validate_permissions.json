@@ -1,0 +1,15 @@
+{
+  "id": "ml_validate_permissions",
+  "type": "workflow",
+  "description": "Check the ML privileges of the calling user; run first if tools return empty results.",
+  "tags": [
+    "ml",
+    "remediation"
+  ],
+  "configuration": {
+    "workflow_id": "@@workflow:ad_validate_ml_tool_permissions@@"
+  },
+  "confirmation": {
+    "askUser": "never"
+  }
+}
