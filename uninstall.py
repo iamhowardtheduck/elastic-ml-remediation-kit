@@ -53,6 +53,8 @@ def main():
         if name in wf_ids:
             do("workflow", name, "DELETE", f"/api/workflows/workflow/{wf_ids[name]}")
 
+    do("dashboard", "ml-job-health", "DELETE", "/api/dashboards/ml-job-health")
+
     if a.delete_data:
         do("index", "ml-remediation-log", "DELETE", "/ml-remediation-log", es=True)
         do("pipeline", "ml-remediation-log", "DELETE", "/_ingest/pipeline/ml-remediation-log", es=True)

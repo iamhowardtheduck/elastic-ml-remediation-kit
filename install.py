@@ -8,13 +8,14 @@ Installs or updates, idempotently:
   * Agent Builder tools, skills and the ml-job-remediator agent
   * Kibana alerting rules     (matched by name)
   * optional: ingest-hardening (Logstash queue backlog rule + workflow)
+  * dashboard                 "ML Job Health & Remediation" (PUT /api/dashboards/ml-job-health, upsert)
 
 Modes:
   python3 install.py --dry-run     show what would be created/updated, change nothing
   python3 install.py --check       compare the package with what is deployed (read-only drift report)
   python3 install.py               install / update
 Options:
-  --components ml,ingest           what to install (default: ml,ingest)
+  --components ml,ingest,dashboard what to install (default: all three)
   --book auto|yes|no               ml_book_search tool + ml-job-design-guide skill (default auto:
                                    only if the ml-book-passages index exists - see knowledge-base/)
   --no-rules                       install everything except alerting rules (no automation runs)
@@ -284,12 +285,32 @@ def patch_bundle_tool(c, rep, apply):
     rep.add("patch", "ad_ts_model_memory_health.limit", "OK" if st == 200 else "ERROR")
 
 
+def install_dashboard(c, rep, apply):
+    """Kibana injects defaults into stored panels, so drift is judged on title + panel ids/types/grid."""
+    body = json.loads((ROOT / "dashboards/ml-job-health.dashboard.json").read_text())
+    st, cur = c.kb("GET", "/api/dashboards/ml-job-health")
+    def shape(panels):
+        return sorted((p.get("id"), p["config"].get("type"), json.dumps(p["grid"], sort_keys=True)) for p in panels)
+    if st == 200:
+        data = cur.get("data", cur)
+        if data.get("title") == body["title"] and shape(data.get("panels", [])) == shape(body["panels"]):
+            return rep.add("dashboard", body["title"], "same", "ml-job-health")
+        status = "update"
+    else:
+        status = "create"
+    if not apply:
+        return rep.add("dashboard", body["title"], status, "ml-job-health")
+    st, r = c.kb("PUT", "/api/dashboards/ml-job-health", body)
+    rep.add("dashboard", body["title"], "OK" if st == 200 else "ERROR",
+            "ml-job-health" if st == 200 else json.dumps(r)[:300])
+
+
 # ----------------------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--components", default="ml,ingest")
+    ap.add_argument("--components", default="ml,ingest,dashboard")
     ap.add_argument("--book", choices=["auto", "yes", "no"], default="auto")
     ap.add_argument("--no-rules", action="store_true")
     a = ap.parse_args()
@@ -358,6 +379,10 @@ def main():
                     "(edit agent-id in logstash-queue-backlog.yaml to use another agent)")
         if not a.no_rules:
             install_rule(c, rep, apply, ROOT / "ingest-hardening/rules/logstash-queue-backlog.json", wf_ids)
+
+    if "dashboard" in comps:
+        print("\nDashboard")
+        install_dashboard(c, rep, apply)
 
     counts = {}
     for _, _, s, _ in rep.rows:

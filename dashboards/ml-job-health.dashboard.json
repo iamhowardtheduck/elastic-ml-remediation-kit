@@ -1,0 +1,725 @@
+{
+  "title": "ML Job Health & Remediation",
+  "description": "Anomaly detection job health and performance, the alert conditions that drive automated remediation (delayed data, job errors, Logstash backlog), and what the automation did. Part of the Elastic ML Remediation Kit.",
+  "time_range": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "vis",
+      "id": "kpi-opened",
+      "grid": {
+        "x": 0,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM metrics-elasticsearch.stack_monitoring.ml_job-* | WHERE @timestamp > NOW() - 10 minutes | STATS state = LAST(elasticsearch.ml.job.state, @timestamp), mem = LAST(elasticsearch.ml.job.model_size.memory_status, @timestamp) BY job = elasticsearch.ml.job.id | STATS `Jobs opened` = SUM(CASE(state == \"opened\", 1, 0)), `of jobs` = COUNT(*)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Jobs opened"
+          },
+          {
+            "type": "secondary",
+            "column": "of jobs"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-failed",
+      "grid": {
+        "x": 7,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM metrics-elasticsearch.stack_monitoring.ml_job-* | WHERE @timestamp > NOW() - 10 minutes | STATS state = LAST(elasticsearch.ml.job.state, @timestamp), mem = LAST(elasticsearch.ml.job.model_size.memory_status, @timestamp) BY job = elasticsearch.ml.job.id | STATS `Failed jobs` = SUM(CASE(state == \"failed\", 1, 0))"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Failed jobs"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-memory",
+      "grid": {
+        "x": 14,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM metrics-elasticsearch.stack_monitoring.ml_job-* | WHERE @timestamp > NOW() - 10 minutes | STATS state = LAST(elasticsearch.ml.job.state, @timestamp), mem = LAST(elasticsearch.ml.job.model_size.memory_status, @timestamp) BY job = elasticsearch.ml.job.id | STATS `At memory limit` = SUM(CASE(mem IN (\"soft_limit\", \"hard_limit\"), 1, 0))"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "At memory limit"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-alerts",
+      "grid": {
+        "x": 21,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM .alerts-stack.alerts-default | WHERE kibana.alert.status == \"active\" AND kibana.alert.rule.name IN (\"ML Notifications - Delayed Data Detected\", \"ML Notifications - Job/Datafeed Errors\", \"Logstash persistent queue backing up\") | STATS `Active alerts` = COUNT_DISTINCT(kibana.alert.uuid)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Active alerts"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-missed",
+      "grid": {
+        "x": 28,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM .ml-notifications-* | WHERE timestamp >= ?_tstart AND timestamp <= ?_tend AND job_type == \"anomaly_detector\" AND message LIKE \"*ingest latency*\" | GROK message \"Datafeed has missed %{DATA:missed_raw} documents due to ingest latency, latest bucket with missing data is \\\\[%{DATA:bucket}\\\\]\" | EVAL missed_n = TO_LONG(REPLACE(missed_raw, \",\", \"\")) | STATS missed = MAX(missed_n) BY job_id, bucket | STATS `Docs missed` = SUM(missed)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Docs missed",
+            "format": {
+              "type": "number",
+              "decimals": 0,
+              "compact": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-fixes",
+      "grid": {
+        "x": 35,
+        "y": 0,
+        "w": 7,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM ml-remediation-log | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend AND outcome == \"applied\" | STATS `Auto-fixes applied` = COUNT(*)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Auto-fixes applied"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "kpi-escalations",
+      "grid": {
+        "x": 42,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "config": {
+        "title": "",
+        "type": "metric",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM ml-remediation-log | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend AND outcome IN (\"escalated\", \"failed\") | STATS `Escalations` = COUNT(*)"
+        },
+        "metrics": [
+          {
+            "type": "primary",
+            "column": "Escalations"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "job-state",
+      "grid": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 10
+      },
+      "config": {
+        "title": "Anomaly detection jobs by state",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM metrics-elasticsearch.stack_monitoring.ml_job-* | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend | STATS state = LAST(elasticsearch.ml.job.state, @timestamp) BY job = elasticsearch.ml.job.id, t = BUCKET(@timestamp, 48, ?_tstart, ?_tend) | STATS jobs = COUNT(*) BY t, state"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "jobs"
+              }
+            ],
+            "breakdown_by": {
+              "column": "state"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "problems-by-type",
+      "grid": {
+        "x": 24,
+        "y": 5,
+        "w": 24,
+        "h": 10
+      },
+      "config": {
+        "title": "Job warnings and errors by type",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM .ml-notifications-* | WHERE timestamp >= ?_tstart AND timestamp <= ?_tend AND job_type == \"anomaly_detector\" AND level IN (\"warning\", \"error\") | EVAL type = CASE(message LIKE \"*ingest latency*\", \"Delayed data\", message LIKE \"*no data*\", \"No data\", message LIKE \"*extracting data*\", \"Extraction error\", message LIKE \"*No node found*\", \"No node to start\", message LIKE \"*memory*\", \"Memory\", message LIKE \"*flushing*\", \"Flush error\", \"Other\") | STATS messages = COUNT(*) BY t = BUCKET(timestamp, 48, ?_tstart, ?_tend), type"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "messages"
+              }
+            ],
+            "breakdown_by": {
+              "column": "type"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "missed-by-job",
+      "grid": {
+        "x": 0,
+        "y": 15,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Documents missed (ingest latency) - top jobs",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "bar_horizontal",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM .ml-notifications-* | WHERE timestamp >= ?_tstart AND timestamp <= ?_tend AND message LIKE \"*ingest latency*\" | GROK message \"Datafeed has missed %{DATA:missed_raw} documents due to ingest latency, latest bucket with missing data is \\\\[%{DATA:bucket}\\\\]\" | EVAL missed_n = TO_LONG(REPLACE(missed_raw, \",\", \"\")) | STATS missed = MAX(missed_n) BY job_id, bucket | STATS missed = SUM(missed) BY job_id | SORT missed DESC | LIMIT 10"
+            },
+            "x": {
+              "column": "job_id"
+            },
+            "y": [
+              {
+                "column": "missed",
+                "format": {
+                  "type": "number",
+                  "decimals": 0,
+                  "compact": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "bucket-latency",
+      "grid": {
+        "x": 16,
+        "y": 15,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Bucket processing time (ms, all jobs)",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM .ml-anomalies-* | WHERE result_type == \"bucket\" AND timestamp >= ?_tstart AND timestamp <= ?_tend | STATS p50 = PERCENTILE(processing_time_ms, 50), p95 = PERCENTILE(processing_time_ms, 95) BY t = BUCKET(timestamp, 48, ?_tstart, ?_tend)"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "p50"
+              },
+              {
+                "column": "p95"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "records-processed",
+      "grid": {
+        "x": 32,
+        "y": 15,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Records analyzed (all jobs)",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "area",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM metrics-elasticsearch.stack_monitoring.ml_job-* | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend | STATS hi = MAX(elasticsearch.ml.job.data_counts.processed_record_count), lo = MIN(elasticsearch.ml.job.data_counts.processed_record_count) BY job = elasticsearch.ml.job.id, t = BUCKET(@timestamp, 48, ?_tstart, ?_tend) | EVAL delta = CASE(hi >= lo, hi - lo, 0) | STATS records = SUM(delta) BY t"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "records",
+                "format": {
+                  "type": "number",
+                  "decimals": 1,
+                  "compact": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "alerts-by-rule",
+      "grid": {
+        "x": 0,
+        "y": 25,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Remediation alerts raised, by rule",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM .alerts-stack.alerts-default | WHERE kibana.alert.rule.name IN (\"ML Notifications - Delayed Data Detected\", \"ML Notifications - Job/Datafeed Errors\", \"Logstash persistent queue backing up\") AND kibana.alert.start >= ?_tstart AND kibana.alert.start <= ?_tend | STATS alerts = COUNT_DISTINCT(kibana.alert.uuid) BY t = BUCKET(kibana.alert.start, 48, ?_tstart, ?_tend), rule = kibana.alert.rule.name"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "alerts"
+              }
+            ],
+            "breakdown_by": {
+              "column": "rule"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "actions-by-outcome",
+      "grid": {
+        "x": 16,
+        "y": 25,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Remediation actions, by outcome",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "bar_stacked",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM ml-remediation-log | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend AND outcome != \"no_action\" | STATS actions = COUNT(*) BY t = BUCKET(@timestamp, 48, ?_tstart, ?_tend), outcome"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "actions"
+              }
+            ],
+            "breakdown_by": {
+              "column": "outcome"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "logstash-queue",
+      "grid": {
+        "x": 32,
+        "y": 25,
+        "w": 16,
+        "h": 10
+      },
+      "config": {
+        "title": "Logstash persistent queue, by pipeline",
+        "type": "xy",
+        "axis": {
+          "x": {
+            "title": {
+              "visible": false
+            },
+            "scale": "temporal",
+            "domain": {
+              "type": "fit",
+              "rounding": false
+            }
+          },
+          "y": {
+            "title": {
+              "visible": false
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "line",
+            "data_source": {
+              "type": "esql",
+              "query": "FROM metrics-logstash.pipeline-* | WHERE @timestamp >= ?_tstart AND @timestamp <= ?_tend AND logstash.pipeline.total.queues.type == \"persisted\" | STATS queue = MAX(logstash.pipeline.total.queues.current_size.bytes) BY t = BUCKET(@timestamp, 48, ?_tstart, ?_tend), pipeline = logstash.pipeline.name"
+            },
+            "x": {
+              "column": "t",
+              "label": "Time"
+            },
+            "y": [
+              {
+                "column": "queue",
+                "format": {
+                  "type": "bytes",
+                  "decimals": 1
+                }
+              }
+            ],
+            "breakdown_by": {
+              "column": "pipeline"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "memory-table",
+      "grid": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "title": "Model memory by job (latest)",
+        "type": "data_table",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM .ml-anomalies-* | WHERE result_type == \"model_size_stats\" AND timestamp >= ?_tstart AND timestamp <= ?_tend | STATS model_bytes = LAST(model_bytes, timestamp), limit_raw = LAST(model_bytes_memory_limit, timestamp), memory_status = LAST(memory_status, timestamp), by_fields = LAST(total_by_field_count, timestamp) BY job_id | EVAL limit_bytes = TO_DOUBLE(limit_raw), `Model MB` = ROUND(model_bytes / 1048576.0, 1), `Limit MB` = ROUND(limit_bytes / 1048576.0), `% of limit` = ROUND(100.0 * model_bytes / limit_bytes, 1) | SORT `% of limit` DESC | KEEP job_id, memory_status, `Model MB`, `Limit MB`, `% of limit`, by_fields | LIMIT 50"
+        },
+        "rows": [
+          {
+            "column": "job_id"
+          },
+          {
+            "column": "memory_status"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "Model MB"
+          },
+          {
+            "column": "Limit MB"
+          },
+          {
+            "column": "% of limit"
+          },
+          {
+            "column": "by_fields"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "problems-table",
+      "grid": {
+        "x": 24,
+        "y": 35,
+        "w": 24,
+        "h": 12
+      },
+      "config": {
+        "title": "Jobs with warnings or errors",
+        "type": "data_table",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM .ml-notifications-* | WHERE timestamp >= ?_tstart AND timestamp <= ?_tend AND job_type == \"anomaly_detector\" AND level IN (\"warning\", \"error\") | EVAL type = CASE(message LIKE \"*ingest latency*\", \"Delayed data\", message LIKE \"*no data*\", \"No data\", message LIKE \"*extracting data*\", \"Extraction error\", message LIKE \"*No node found*\", \"No node to start\", message LIKE \"*memory*\", \"Memory\", message LIKE \"*flushing*\", \"Flush error\", \"Other\") | STATS Warnings = SUM(CASE(level == \"warning\", 1, 0)), Errors = SUM(CASE(level == \"error\", 1, 0)), `Latest problem` = LAST(type, timestamp), `Last seen` = MAX(timestamp) BY job_id | SORT Errors DESC, Warnings DESC | LIMIT 50"
+        },
+        "rows": [
+          {
+            "column": "job_id"
+          },
+          {
+            "column": "Latest problem"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "Errors"
+          },
+          {
+            "column": "Warnings"
+          },
+          {
+            "column": "Last seen"
+          }
+        ]
+      }
+    },
+    {
+      "type": "vis",
+      "id": "remediation-log",
+      "grid": {
+        "x": 0,
+        "y": 47,
+        "w": 48,
+        "h": 10
+      },
+      "config": {
+        "title": "Remediation actions by job (last 7 days)",
+        "type": "data_table",
+        "data_source": {
+          "type": "esql",
+          "query": "FROM ml-remediation-log | WHERE @timestamp >= ?_tend - 7 days AND outcome != \"no_action\" | STATS Actions = COUNT(*), `Last action` = MAX(@timestamp), `query_delay now` = LAST(query_delay_after, @timestamp), Case = LAST(case_id, @timestamp) BY job_id, action, outcome | SORT `Last action` DESC | LIMIT 100"
+        },
+        "rows": [
+          {
+            "column": "job_id"
+          },
+          {
+            "column": "action"
+          },
+          {
+            "column": "outcome"
+          },
+          {
+            "column": "query_delay now"
+          },
+          {
+            "column": "Case"
+          }
+        ],
+        "metrics": [
+          {
+            "column": "Actions"
+          },
+          {
+            "column": "Last action"
+          }
+        ]
+      }
+    }
+  ]
+}
